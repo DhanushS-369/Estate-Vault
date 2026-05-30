@@ -11,21 +11,25 @@ const { startJobs }  = require('./jobs/scheduler');
 const app = express();
 app.set('trust proxy', 1);
 
+const normalizeOrigin = (origin) => origin?.trim().replace(/\/+$/, '');
 const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000')
   .split(',')
-  .map(origin => origin.trim())
+  .map(normalizeOrigin)
   .filter(Boolean);
 
 app.use(helmet());
-app.use(cors({
+const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    if (!origin || allowedOrigins.includes(normalizeOrigin(origin))) return callback(null, true);
     return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-setup-key'],
-}));
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use('/api/', apiLimiter);
