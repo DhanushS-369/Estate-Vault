@@ -13,7 +13,7 @@ const validate = (req, res, next) => {
 };
 
 const registerRules = [
-  body('email').isEmail().withMessage('Valid email required').normalizeEmail(),
+  body('email').isEmail().withMessage('Valid email required').trim().toLowerCase(),
   body('password')
     .isLength({ min: 12 }).withMessage('Password must be at least 12 characters')
     .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])/)
@@ -22,7 +22,7 @@ const registerRules = [
 ];
 
 const loginRules = [
-  body('email').isEmail().withMessage('Valid email required').normalizeEmail(),
+  body('email').isEmail().withMessage('Valid email required').trim().toLowerCase(),
   body('password').notEmpty().withMessage('Password required'),
 ];
 

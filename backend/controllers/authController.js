@@ -17,6 +17,20 @@ const generateToken = (userId) =>
 
 const generateOtp = () => crypto.randomInt(100000, 999999).toString();
 
+const getEmailCandidates = (email) => {
+  const clean = String(email || '').trim().toLowerCase();
+  const candidates = new Set([clean]);
+  const [local, domain] = clean.split('@');
+
+  if (local && ['gmail.com', 'googlemail.com'].includes(domain)) {
+    candidates.add(`${local.split('+')[0].replace(/\./g, '')}@gmail.com`);
+  }
+
+  return [...candidates].filter(Boolean);
+};
+
+const findUserByEmail = (email) => User.findOne({ email: { $in: getEmailCandidates(email) } });
+
 const clientInfo = (req) => ({
   ipAddress: req.ip || req.connection?.remoteAddress,
   userAgent: req.get('User-Agent'),
@@ -24,12 +38,55 @@ const clientInfo = (req) => ({
 
 // ── POST /api/auth/register ─────────────────────────
 const register = async (req, res) => {
+  let createdUserId = null;
   try {
     const { email, password, fullName } = req.body;
     const { ipAddress, userAgent } = clientInfo(req);
 
-    const existing = await User.findOne({ email });
+    const existing = await findUserByEmail(email).select('+emailVerification.verified');
     if (existing) {
+      if (existing.status === 'pending_verification' && !existing.emailVerification?.verified) {
+        const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
+        const otp = generateOtp();
+        const expiry = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+
+        existing.email = email;
+        existing.passwordHash = passwordHash;
+        existing.fullName = fullName;
+        existing.emailVerification = { otp, expiry, verified: false };
+        await existing.save();
+
+        await Promise.allSettled([
+          Vault.findOneAndUpdate(
+            { userId: existing._id },
+            { $setOnInsert: { userId: existing._id, vaultName: `${fullName}'s Estate Vault` } },
+            { upsert: true }
+          ),
+          DeadmanSwitch.findOneAndUpdate(
+            { userId: existing._id },
+            { $setOnInsert: { userId: existing._id } },
+            { upsert: true }
+          ),
+        ]);
+
+        try {
+          const { subject, html } = emailTemplates.emailVerificationOtp(fullName, otp);
+          await sendEmail({ to: email, subject, html });
+        } catch (emailErr) {
+          return res.status(502).json({
+            success: false,
+            error: 'Account exists but the verification email failed to send. Check GMAIL_USER and GMAIL_APP_PASSWORD on the backend host.',
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: 'Account already existed but was not verified. A new verification code has been sent to your email.',
+          userId: existing._id,
+          email: existing.email,
+        });
+      }
+
       return res.status(409).json({ success: false, error: 'An account with this email already exists.' });
     }
 
@@ -44,6 +101,7 @@ const register = async (req, res) => {
       status: 'pending_verification',
       emailVerification: { otp, expiry, verified: false },
     });
+    createdUserId = user._id;
 
     // Create vault + dead man's switch
     await Vault.create({ userId: user._id, vaultName: `${fullName}'s Estate Vault` });
@@ -74,7 +132,17 @@ const register = async (req, res) => {
     });
   } catch (err) {
     console.error('Register error:', err);
-    return res.status(500).json({ success: false, error: 'Registration failed. Please try again.' });
+    if (createdUserId) {
+      await Promise.allSettled([
+        Vault.deleteOne({ userId: createdUserId }),
+        DeadmanSwitch.deleteOne({ userId: createdUserId }),
+        User.deleteOne({ _id: createdUserId }),
+      ]);
+    }
+    return res.status(500).json({
+      success: false,
+      error: `Registration failed on the backend: ${err.message}`,
+    });
   }
 };
 
@@ -156,7 +224,7 @@ const login = async (req, res) => {
     const { email, password } = req.body;
     const { ipAddress, userAgent } = clientInfo(req);
 
-    const user = await User.findOne({ email }).select('+passwordHash +loginOtp');
+    const user = await findUserByEmail(email).select('+passwordHash +loginOtp');
 
     if (!user) {
       await bcrypt.hash(password, SALT_ROUNDS); // timing-safe

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { authAPI } from '../utils/api';
+import { authAPI, getApiErrorMessage } from '../utils/api';
 import { Brand, Card, Input, PrimaryButton, Alert } from '../components/UI';
 
 // ── Step 1: Registration form
@@ -25,7 +25,7 @@ function RegisterForm({ onSuccess }) {
       const res = await authAPI.register({ fullName: form.fullName, email: form.email, password: form.password });
       onSuccess(res.data.userId, form.email);
     } catch (err) {
-      setAlert({ type: 'error', msg: err.response?.data?.error || 'Registration failed.' });
+      setAlert({ type: 'error', msg: getApiErrorMessage(err, 'Registration failed.') });
     }
     setLoading(false);
   };

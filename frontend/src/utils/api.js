@@ -7,6 +7,19 @@ const normalizeApiBaseUrl = (url) => {
 
 export const API_BASE_URL = normalizeApiBaseUrl(process.env.REACT_APP_API_URL);
 
+export const getApiErrorMessage = (err, fallback = 'Request failed.') => {
+  if (!err.response) {
+    return `Cannot reach the backend API. Check REACT_APP_API_URL, backend deployment status, and CORS FRONTEND_URL. Current API: ${API_BASE_URL}`;
+  }
+
+  const data = err.response.data;
+  if (data?.details?.length) {
+    return data.details.map(item => item.message).join(' ');
+  }
+
+  return data?.error || data?.message || fallback;
+};
+
 // ── User API instance ───────────────────────────────
 const api = axios.create({ baseURL: API_BASE_URL });
 
