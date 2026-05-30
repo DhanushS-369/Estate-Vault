@@ -49,9 +49,20 @@ const register = async (req, res) => {
     await Vault.create({ userId: user._id, vaultName: `${fullName}'s Estate Vault` });
     await DeadmanSwitch.create({ userId: user._id });
 
-    // Send OTP email
-    const { subject, html } = emailTemplates.emailVerificationOtp(fullName, otp);
-    await sendEmail({ to: email, subject, html });
+    try {
+      const { subject, html } = emailTemplates.emailVerificationOtp(fullName, otp);
+      await sendEmail({ to: email, subject, html });
+    } catch (emailErr) {
+      await Promise.allSettled([
+        Vault.deleteOne({ userId: user._id }),
+        DeadmanSwitch.deleteOne({ userId: user._id }),
+        User.deleteOne({ _id: user._id }),
+      ]);
+      return res.status(502).json({
+        success: false,
+        error: 'Account could not be created because the verification email failed to send. Check GMAIL_USER and GMAIL_APP_PASSWORD on the backend host.',
+      });
+    }
 
     await auditLog({ userId: user._id, action: AUDIT_ACTIONS.USER_REGISTERED, ipAddress, userAgent, metadata: { email } });
 
