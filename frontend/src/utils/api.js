@@ -1,6 +1,11 @@
 import axios from 'axios';
 
-export const API_BASE_URL = process.env.REACT_APP_API_URL || '/api';
+const normalizeApiBaseUrl = (url) => {
+  const baseUrl = (url || '/api').replace(/\/+$/, '');
+  return baseUrl.endsWith('/api') ? baseUrl : `${baseUrl}/api`;
+};
+
+export const API_BASE_URL = normalizeApiBaseUrl(process.env.REACT_APP_API_URL);
 
 // ── User API instance ───────────────────────────────
 const api = axios.create({ baseURL: API_BASE_URL });
