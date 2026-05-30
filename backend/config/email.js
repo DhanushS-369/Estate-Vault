@@ -1,6 +1,109 @@
 const nodemailer = require('nodemailer');
 const { logger } = require('./logger');
 
+const base64UrlEncode = (value) =>
+  Buffer.from(value)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+
+const encodeSubject = (subject) =>
+  `=?UTF-8?B?${Buffer.from(subject, 'utf8').toString('base64')}?=`;
+
+const gmailApiConfigured = () =>
+  process.env.GMAIL_USER &&
+  process.env.GMAIL_OAUTH_CLIENT_ID &&
+  process.env.GMAIL_OAUTH_CLIENT_SECRET &&
+  process.env.GMAIL_OAUTH_REFRESH_TOKEN;
+
+const getGmailAccessToken = async () => {
+  const response = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: process.env.GMAIL_OAUTH_CLIENT_ID,
+      client_secret: process.env.GMAIL_OAUTH_CLIENT_SECRET,
+      refresh_token: process.env.GMAIL_OAUTH_REFRESH_TOKEN,
+      grant_type: 'refresh_token',
+    }),
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = result?.error_description || result?.error || `Google OAuth returned ${response.status}`;
+    throw new Error(message);
+  }
+
+  return result.access_token;
+};
+
+const buildGmailMessage = ({ to, subject, html }) => {
+  const from = process.env.GMAIL_FROM || `"Digital Estate Vault" <${process.env.GMAIL_USER}>`;
+  const recipients = Array.isArray(to) ? to.join(', ') : to;
+  const mime = [
+    `From: ${from}`,
+    `To: ${recipients}`,
+    `Subject: ${encodeSubject(subject)}`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    html,
+  ].join('\r\n');
+
+  return base64UrlEncode(mime);
+};
+
+const sendWithGmailApi = async ({ to, subject, html }) => {
+  const accessToken = await getGmailAccessToken();
+  const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ raw: buildGmailMessage({ to, subject, html }) }),
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = result?.error?.message || `Gmail API returned ${response.status}`;
+    throw new Error(message);
+  }
+
+  logger.info(`Email sent via Gmail API to ${to}: ${result.id}`);
+  return result;
+};
+
+const resendFrom = () => process.env.RESEND_FROM || 'Digital Estate Vault <onboarding@resend.dev>';
+
+const sendWithResend = async ({ to, subject, html }) => {
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: resendFrom(),
+      to,
+      subject,
+      html,
+    }),
+  });
+
+  const result = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    const message = result?.message || result?.error || `Resend API returned ${response.status}`;
+    throw new Error(message);
+  }
+
+  logger.info(`Email sent via Resend to ${to}: ${result.id}`);
+  return result;
+};
+
 const createTransporter = () => {
   return nodemailer.createTransport({
     service: 'gmail',
@@ -16,6 +119,14 @@ const createTransporter = () => {
 
 const sendEmail = async ({ to, subject, html }) => {
   try {
+    if (gmailApiConfigured()) {
+      return await sendWithGmailApi({ to, subject, html });
+    }
+
+    if (process.env.RESEND_API_KEY) {
+      return await sendWithResend({ to, subject, html });
+    }
+
     if (!process.env.GMAIL_USER || process.env.GMAIL_USER === 'your_gmail@gmail.com') {
       logger.warn(`[EMAIL SIMULATED] To: ${to} | Subject: ${subject}`);
       return { simulated: true };
