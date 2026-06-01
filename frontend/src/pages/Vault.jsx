@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { vaultAPI } from '../utils/api';
+import { getApiErrorMessage, vaultAPI } from '../utils/api';
 import { Alert, PrimaryButton, PageLoader } from '../components/UI';
 
 const ASSET_TYPES = [
@@ -11,7 +11,7 @@ const ASSET_TYPES = [
 ];
 
 const ASSET_ICONS = ASSET_TYPES.reduce((acc, type) => ({ ...acc, [type.key]: type.icon }), {});
-const MAX_DOCUMENT_SIZE = 6 * 1024 * 1024;
+const MAX_DOCUMENT_SIZE = 3 * 1024 * 1024;
 
 const inputStyle = {
   width: '100%',
@@ -150,7 +150,7 @@ export default function Vault() {
   const handleDocumentFile = async (file) => {
     if (!file) return;
     if (file.size > MAX_DOCUMENT_SIZE) {
-      setAlert({ type: 'error', msg: 'Document must be 6MB or smaller.' });
+      setAlert({ type: 'error', msg: 'Document must be 3MB or smaller.' });
       return;
     }
 
@@ -197,7 +197,7 @@ export default function Vault() {
       setForm({ assetType: 'password', label: '', data: {} });
       setAlert({ type: 'success', msg: 'Asset added and encrypted.' });
     } catch (err) {
-      setAlert({ type: 'error', msg: err.response?.data?.error || 'Failed to add asset.' });
+      setAlert({ type: 'error', msg: getApiErrorMessage(err, 'Failed to add asset.') });
     }
     setSaving(false);
   };

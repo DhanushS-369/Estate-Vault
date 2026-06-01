@@ -4,6 +4,117 @@ const User = require('../models/User');
 const { auditLog, AUDIT_ACTIONS } = require('../config/audit');
 const { sendEmail, emailTemplates } = require('../config/email');
 
+const getPublicFrontendUrl = () => {
+  const configured = process.env.PUBLIC_FRONTEND_URL || process.env.FRONTEND_URL || '';
+  const origins = configured.split(',').map(origin => origin.trim().replace(/\/+$/, '')).filter(Boolean);
+  return origins.find(origin => origin.startsWith('https://')) || origins[0] || 'http://localhost:3000';
+};
+
+const getPublicBackendUrl = (req) => {
+  const configured = process.env.PUBLIC_BACKEND_URL || process.env.BACKEND_URL;
+  if (configured) return configured.trim().replace(/\/+$/, '');
+  return `${req.protocol}://${req.get('host')}`;
+};
+
+const escapeHtml = (value = '') => String(value)
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const renderNomineeResponsePage = ({ title, message, tone = 'success', portalUrl }) => {
+  const color = tone === 'success' ? '#4caf7d' : tone === 'error' ? '#c45555' : '#c9a84c';
+  const safeTitle = escapeHtml(title);
+  const safeMessage = escapeHtml(message);
+  const safePortalUrl = portalUrl ? escapeHtml(portalUrl) : '';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>${safeTitle}</title>
+  <style>
+    body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center; background:#08080b; color:#c8c8d8; font-family:Arial,sans-serif; }
+    main { width:min(440px, calc(100vw - 40px)); border:1px solid #2d2d38; background:#101017; padding:36px; box-sizing:border-box; }
+    .brand { color:#c9a84c; letter-spacing:4px; font-size:18px; margin-bottom:28px; text-align:center; }
+    h1 { color:${color}; font-size:26px; font-weight:400; margin:0 0 12px; }
+    p { color:#9a9aaa; font-size:14px; line-height:1.7; margin:0 0 20px; }
+    a { display:block; border:1px solid #c9a84c; color:#c9a84c; text-decoration:none; text-align:center; padding:13px 16px; letter-spacing:2px; font-size:11px; text-transform:uppercase; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">ESTATE VAULT</div>
+    <h1>${safeTitle}</h1>
+    <p>${safeMessage}</p>
+    ${safePortalUrl ? `<a href="${safePortalUrl}">Open Nominee Portal</a>` : ''}
+  </main>
+</body>
+</html>`;
+};
+
+const acceptNomineeByToken = async (token) => {
+  if (!token) return { status: 400, success: false, error: 'Token required.' };
+
+  const nominee = await Nominee.findOne({ invitationToken: token });
+  if (!nominee) return { status: 404, success: false, error: 'Invalid or expired invitation.' };
+  if (nominee.invitationExpiry < new Date()) {
+    return { status: 400, success: false, error: 'Invitation has expired. Ask the vault owner to re-invite you.' };
+  }
+  if (nominee.status === 'accepted') {
+    return { status: 400, success: false, error: 'Nomination already accepted.' };
+  }
+
+  await Nominee.findByIdAndUpdate(nominee._id, {
+    status: 'accepted',
+    invitationToken: null,
+    invitationExpiry: null,
+  });
+
+  const owner = await User.findById(nominee.vaultOwnerId);
+  if (owner) {
+    const { subject, html } = emailTemplates.nomineeAccepted(owner.fullName, nominee.fullName, nominee.email);
+    await sendEmail({ to: owner.email, subject, html }).catch(() => {});
+  }
+
+  return {
+    status: 200,
+    success: true,
+    message: 'Nomination accepted. The vault owner has been notified.',
+    nominee,
+    owner,
+  };
+};
+
+const declineNomineeByToken = async (token) => {
+  if (!token) return { status: 400, success: false, error: 'Token required.' };
+
+  const nominee = await Nominee.findOne({ invitationToken: token });
+  if (!nominee) return { status: 404, success: false, error: 'Invalid or expired invitation.' };
+
+  await Nominee.findByIdAndUpdate(nominee._id, {
+    status: 'declined',
+    invitationToken: null,
+    invitationExpiry: null,
+  });
+
+  const owner = await User.findById(nominee.vaultOwnerId);
+  if (owner) {
+    const { subject, html } = emailTemplates.nomineeDeclined(owner.fullName, nominee.fullName, nominee.email);
+    await sendEmail({ to: owner.email, subject, html }).catch(() => {});
+  }
+
+  return {
+    status: 200,
+    success: true,
+    message: 'Nomination declined. The vault owner has been notified.',
+    nominee,
+    owner,
+  };
+};
+
 // ── GET /api/nominees ──────────────────────────────
 const getNominees = async (req, res) => {
   try {
@@ -59,9 +170,10 @@ const addNominee = async (req, res) => {
       nomineeUserId:    nomineeUser?._id || null,
     });
 
-    // Build accept / decline URLs
-    const acceptUrl  = `${process.env.FRONTEND_URL}/accept-nomination?token=${invitationToken}&action=accept`;
-    const declineUrl = `${process.env.FRONTEND_URL}/accept-nomination?token=${invitationToken}&action=decline`;
+    // Email links hit the backend directly so nominees do not need Vercel access.
+    const backendUrl = getPublicBackendUrl(req);
+    const acceptUrl  = `${backendUrl}/api/nominees/respond?token=${invitationToken}&action=accept`;
+    const declineUrl = `${backendUrl}/api/nominees/respond?token=${invitationToken}&action=decline`;
 
     const { subject, html } = emailTemplates.nomineeInvite(fullName, owner.fullName, acceptUrl, declineUrl);
     await sendEmail({ to: email, subject, html });
@@ -111,36 +223,17 @@ const removeNominee = async (req, res) => {
 const acceptInvitation = async (req, res) => {
   try {
     const { token } = req.body;
-    if (!token) return res.status(400).json({ success: false, error: 'Token required.' });
-
-    const nominee = await Nominee.findOne({ invitationToken: token });
-    if (!nominee) return res.status(404).json({ success: false, error: 'Invalid or expired invitation.' });
-    if (nominee.invitationExpiry < new Date()) {
-      return res.status(400).json({ success: false, error: 'Invitation has expired. Ask the vault owner to re-invite you.' });
-    }
-    if (nominee.status === 'accepted') {
-      return res.status(400).json({ success: false, error: 'Nomination already accepted.' });
+    const result = await acceptNomineeByToken(token);
+    if (!result.success) {
+      return res.status(result.status).json({ success: false, error: result.error });
     }
 
-    await Nominee.findByIdAndUpdate(nominee._id, {
-      status: 'accepted',
-      invitationToken: null,
-      invitationExpiry: null,
-    });
-
-    // Notify the vault owner
-    const owner = await User.findById(nominee.vaultOwnerId);
-    if (owner) {
-      const { subject, html } = emailTemplates.nomineeAccepted(owner.fullName, nominee.fullName, nominee.email);
-      await sendEmail({ to: owner.email, subject, html }).catch(() => {});
-    }
-
-    // Return the nominee portal access token so the frontend can show the portal link
+    const portalUrl = `${getPublicFrontendUrl()}/nominee-portal?token=${result.nominee.nomineeAccessToken}&owner=${encodeURIComponent(result.owner?.email || '')}`;
     return res.json({
       success: true,
-      message: 'Nomination accepted. The vault owner has been notified.',
-      portalToken: nominee.nomineeAccessToken,
-      portalUrl: `${process.env.FRONTEND_URL}/nominee-portal?token=${nominee.nomineeAccessToken}&owner=${encodeURIComponent(owner?.email || '')}`,
+      message: result.message,
+      portalToken: result.nominee.nomineeAccessToken,
+      portalUrl,
     });
   } catch (err) {
     console.error('acceptInvitation error:', err);
@@ -153,25 +246,12 @@ const acceptInvitation = async (req, res) => {
 const declineInvitation = async (req, res) => {
   try {
     const { token } = req.body;
-    if (!token) return res.status(400).json({ success: false, error: 'Token required.' });
-
-    const nominee = await Nominee.findOne({ invitationToken: token });
-    if (!nominee) return res.status(404).json({ success: false, error: 'Invalid or expired invitation.' });
-
-    await Nominee.findByIdAndUpdate(nominee._id, {
-      status: 'declined',
-      invitationToken: null,
-      invitationExpiry: null,
-    });
-
-    // Notify the vault owner of decline
-    const owner = await User.findById(nominee.vaultOwnerId);
-    if (owner) {
-      const { subject, html } = emailTemplates.nomineeDeclined(owner.fullName, nominee.fullName, nominee.email);
-      await sendEmail({ to: owner.email, subject, html }).catch(() => {});
+    const result = await declineNomineeByToken(token);
+    if (!result.success) {
+      return res.status(result.status).json({ success: false, error: result.error });
     }
 
-    return res.json({ success: true, message: 'Nomination declined. The vault owner has been notified.' });
+    return res.json({ success: true, message: result.message });
   } catch (err) {
     console.error('declineInvitation error:', err);
     return res.status(500).json({ success: false, error: 'Failed to decline invitation.' });
@@ -179,6 +259,44 @@ const declineInvitation = async (req, res) => {
 };
 
 // ── Used by deadman scheduler ──────────────────────
+const respondToInvitation = async (req, res) => {
+  try {
+    const { token } = req.query;
+    const action = req.query.action === 'decline' ? 'decline' : 'accept';
+    const result = action === 'decline'
+      ? await declineNomineeByToken(token)
+      : await acceptNomineeByToken(token);
+
+    if (!result.success) {
+      return res
+        .status(result.status)
+        .send(renderNomineeResponsePage({
+          title: 'Invitation Problem',
+          message: result.error,
+          tone: 'error',
+        }));
+    }
+
+    const portalUrl = action === 'accept'
+      ? `${getPublicFrontendUrl()}/nominee-portal?token=${result.nominee.nomineeAccessToken}&owner=${encodeURIComponent(result.owner?.email || '')}`
+      : '';
+
+    return res.send(renderNomineeResponsePage({
+      title: action === 'accept' ? 'Nomination Accepted' : 'Nomination Declined',
+      message: result.message,
+      tone: action === 'accept' ? 'success' : 'info',
+      portalUrl,
+    }));
+  } catch (err) {
+    console.error('respondToInvitation error:', err);
+    return res.status(500).send(renderNomineeResponsePage({
+      title: 'Invitation Problem',
+      message: 'Failed to process this invitation. Please ask the vault owner to resend it.',
+      tone: 'error',
+    }));
+  }
+};
+
 const resolveActiveNominee = async (vaultOwnerId) => {
   let nominee = await Nominee.findOne({ vaultOwnerId, priorityLevel: 1, status: 'accepted' });
   if (!nominee) nominee = await Nominee.findOne({ vaultOwnerId, priorityLevel: 2, status: 'accepted' });
@@ -191,5 +309,6 @@ module.exports = {
   removeNominee,
   acceptInvitation,
   declineInvitation,
+  respondToInvitation,
   resolveActiveNominee,
 };

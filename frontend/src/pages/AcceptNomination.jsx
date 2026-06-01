@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { nomineesAPI } from '../utils/api';
+import { getApiErrorMessage, nomineesAPI } from '../utils/api';
 import { Brand, Card, Alert, PrimaryButton } from '../components/UI';
 
 export default function AcceptNomination() {
@@ -22,11 +22,11 @@ export default function AcceptNomination() {
     setLoading(true);
     setAlert(null);
     try {
-      await nomineesAPI.acceptInvitation(token);
+      const res = await nomineesAPI.acceptInvitation(token);
       setStep('done');
-      setNomineeInfo({ action: 'accepted' });
+      setNomineeInfo({ action: 'accepted', portalUrl: res.data.portalUrl });
     } catch (err) {
-      setAlert({ type: 'error', msg: err.response?.data?.error || 'Failed to accept invitation. It may have expired.' });
+      setAlert({ type: 'error', msg: getApiErrorMessage(err, 'Failed to accept invitation. It may have expired.') });
     }
     setLoading(false);
   };
@@ -39,7 +39,7 @@ export default function AcceptNomination() {
       setStep('done');
       setNomineeInfo({ action: 'declined' });
     } catch (err) {
-      setAlert({ type: 'error', msg: err.response?.data?.error || 'Failed to process. The invitation may have expired.' });
+      setAlert({ type: 'error', msg: getApiErrorMessage(err, 'Failed to process. The invitation may have expired.') });
     }
     setLoading(false);
   };
@@ -100,6 +100,12 @@ export default function AcceptNomination() {
                     ? 'You are now registered as a nominee. The vault owner has been notified. You will receive an email if any action is required.'
                     : 'You have declined this nomination. The vault owner has been notified.'}
                 </div>
+                {nomineeInfo.portalUrl && (
+                  <a href={nomineeInfo.portalUrl}
+                    style={{ display: 'block', marginTop: 22, padding: '13px 16px', border: '1px solid var(--gold)', color: 'var(--gold)', textDecoration: 'none', fontSize: 11, letterSpacing: '0.15em', textTransform: 'uppercase' }}>
+                    Open Nominee Portal
+                  </a>
+                )}
                 <div style={{ marginTop: 24, fontSize: 11, color: 'var(--muted)' }}>
                   You may close this window.
                 </div>

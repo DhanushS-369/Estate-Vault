@@ -65,6 +65,10 @@ app.get('/api/health', (req, res) => res.json({
 
 app.use('*', (req, res) => res.status(404).json({ success: false, error: 'Route not found.' }));
 app.use((err, req, res, next) => {
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({ success: false, error: 'Request is too large. Use a smaller document.' });
+  }
+
   logger.error('Unhandled error:', err);
   res.status(500).json({ success: false, error: 'Internal server error.' });
 });

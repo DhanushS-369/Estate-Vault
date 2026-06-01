@@ -2,12 +2,17 @@ const Vault = require('../models/Vault');
 const { encrypt, decrypt } = require('../config/encryption');
 const { auditLog, AUDIT_ACTIONS } = require('../config/audit');
 
+const MAX_ASSET_DATA_BYTES = 4 * 1024 * 1024;
+
 // ─── GET /api/vault ────────────────────────────────
 // Get vault + decrypt all assets
 const getVault = async (req, res) => {
   try {
-    const vault = await Vault.findOne({ userId: req.userId });
-    if (!vault) return res.status(404).json({ success: false, error: 'Vault not found.' });
+    const vault = await Vault.findOneAndUpdate(
+      { userId: req.userId },
+      { $setOnInsert: { userId: req.userId } },
+      { new: true, upsert: true }
+    );
 
     // Decrypt each asset
     const decryptedAssets = vault.assets.map(asset => {
@@ -50,7 +55,7 @@ const addAsset = async (req, res) => {
   try {
     const { assetType, label, data } = req.body;
 
-    if (!assetType || !label || !data) {
+    if (!assetType || !label || !data || typeof data !== 'object' || Array.isArray(data)) {
       return res.status(400).json({ success: false, error: 'assetType, label, and data are required.' });
     }
 
@@ -59,16 +64,25 @@ const addAsset = async (req, res) => {
       return res.status(400).json({ success: false, error: `assetType must be one of: ${allowedTypes.join(', ')}` });
     }
 
+    const serializedAsset = JSON.stringify(data);
+    if (Buffer.byteLength(serializedAsset, 'utf8') > MAX_ASSET_DATA_BYTES) {
+      return res.status(413).json({
+        success: false,
+        error: 'Asset is too large. Upload a smaller document or store the document location instead.',
+      });
+    }
+
     // Encrypt the asset data
-    const encryptedAsset = encrypt(JSON.stringify(data));
+    const encryptedAsset = encrypt(serializedAsset);
 
     const vault = await Vault.findOneAndUpdate(
       { userId: req.userId },
-      { $push: { assets: { encryptedAsset, assetType, label } } },
-      { new: true }
+      {
+        $setOnInsert: { userId: req.userId },
+        $push: { assets: { encryptedAsset, assetType, label } },
+      },
+      { new: true, upsert: true }
     );
-
-    if (!vault) return res.status(404).json({ success: false, error: 'Vault not found.' });
 
     const newAsset = vault.assets[vault.assets.length - 1];
 

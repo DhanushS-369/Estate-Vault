@@ -6,9 +6,11 @@ const {
   removeNominee,
   acceptInvitation,
   declineInvitation,
+  respondToInvitation,
 } = require('../controllers/nomineeController');
 
 // ── Public — token-based (no auth needed) ──────────
+router.get('/respond',  respondToInvitation);
 router.post('/accept',  acceptInvitation);
 router.post('/decline', declineInvitation);
 
