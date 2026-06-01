@@ -4,7 +4,9 @@ const { getStatus, confirmCheckin, updateInterval } = require('../controllers/de
 
 router.use(authenticate);
 router.get('/',           getStatus);
+router.get('/status',     getStatus);
 router.post('/checkin',   confirmCheckin);
+router.put('/interval',   updateInterval);
 router.patch('/interval', updateInterval);
 
 module.exports = router;
