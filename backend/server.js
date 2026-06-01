@@ -12,15 +12,23 @@ const app = express();
 app.set('trust proxy', 1);
 
 const normalizeOrigin = (origin) => origin?.trim().replace(/\/+$/, '');
-const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000')
-  .split(',')
+const defaultAllowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'https://estate-vault-five.vercel.app',
+];
+const allowedOrigins = Array.from(new Set([
+  ...defaultAllowedOrigins,
+  ...(process.env.FRONTEND_URL || '').split(','),
+]
   .map(normalizeOrigin)
-  .filter(Boolean);
+  .filter(Boolean)));
 
 app.use(helmet());
 const corsOptions = {
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(normalizeOrigin(origin))) return callback(null, true);
+    logger.warn(`Blocked CORS origin: ${origin}. Allowed origins: ${allowedOrigins.join(', ')}`);
     return callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
