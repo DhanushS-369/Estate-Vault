@@ -45,12 +45,18 @@ const getGmailAccessToken = async () => {
 
   const result = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message = result?.error_description || result?.error || `Google OAuth returned ${response.status}`;
-    throw new Error(message);
+    // This will now clearly print the exact error string Google returns
+    const message = result.error_description || result.error || `Google OAuth returned ${response.status}`;
+    throw new Error(`OAuth Refresh Failed: ${message}`);
+  }
+
+  if (!result.access_token) {
+    throw new Error('Google OAuth response did not contain an access token.');
   }
 
   return result.access_token;
 };
+
 
 const buildGmailMessage = ({ to, subject, html }) => {
   const from = gmailFrom();
