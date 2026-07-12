@@ -13,6 +13,8 @@ app.set('trust proxy', 1);
 
 const normalizeOrigin = (origin) => origin?.trim().replace(/\/+$/, '');
 const defaultAllowedOrigins = [
+  'https://estate-vault-backend.onrender.com',
+  'http://localhost:5000',
   'http://localhost:3000',
   'http://localhost:3001',
   'https://estate-vault-five.vercel.app',

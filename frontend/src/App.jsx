@@ -3,6 +3,7 @@ import { AuthProvider } from './context/AuthContext';
 import ProtectedRoute, { AdminProtectedRoute } from './components/ProtectedRoute';
 import Layout from './components/Layout';
 
+import Home             from './pages/Home';
 import Login            from './pages/Login';
 import Register         from './pages/Register';
 import Vault            from './pages/Vault';
@@ -22,8 +23,8 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <Routes>
-          {/* Redirects */}
-          <Route path="/"    element={<Navigate to="/vault" replace />} />
+          {/* Public start page */}
+          <Route path="/"    element={<Home />} />
 
           {/* User auth */}
           <Route path="/login"    element={<Login />} />
@@ -44,7 +45,7 @@ export default function App() {
           <Route path="/admin"       element={<Navigate to="/admin/login" replace />} />
 
           {/* Catch-all */}
-          <Route path="*" element={<Navigate to="/vault" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
     </AuthProvider>

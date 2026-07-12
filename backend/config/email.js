@@ -17,6 +17,20 @@ const gmailApiConfigured = () =>
   process.env.GMAIL_OAUTH_CLIENT_SECRET &&
   process.env.GMAIL_OAUTH_REFRESH_TOKEN;
 
+const gmailSmtpConfigured = () =>
+  process.env.GMAIL_USER &&
+  process.env.GMAIL_USER !== 'your_gmail@gmail.com' &&
+  process.env.GMAIL_APP_PASSWORD;
+
+const gmailFrom = () => {
+  const configuredFrom = process.env.GMAIL_FROM?.trim();
+  if (configuredFrom) {
+    return configuredFrom;
+  }
+
+  return `"Digital Estate Vault" <${process.env.GMAIL_USER}>`;
+};
+
 const getGmailAccessToken = async () => {
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -39,7 +53,7 @@ const getGmailAccessToken = async () => {
 };
 
 const buildGmailMessage = ({ to, subject, html }) => {
-  const from = process.env.GMAIL_FROM || `"Digital Estate Vault" <${process.env.GMAIL_USER}>`;
+  const from = gmailFrom();
   const recipients = Array.isArray(to) ? to.join(', ') : to;
   const mime = [
     `From: ${from}`,
@@ -118,32 +132,47 @@ const createTransporter = () => {
 };
 
 const sendEmail = async ({ to, subject, html }) => {
-  try {
-    if (gmailApiConfigured()) {
-      return await sendWithGmailApi({ to, subject, html });
-    }
+  const providers = [];
 
-    if (process.env.RESEND_API_KEY) {
-      return await sendWithResend({ to, subject, html });
-    }
-
-    if (!process.env.GMAIL_USER || process.env.GMAIL_USER === 'your_gmail@gmail.com') {
-      logger.warn(`[EMAIL SIMULATED] To: ${to} | Subject: ${subject}`);
-      return { simulated: true };
-    }
-    const transporter = createTransporter();
-    const info = await transporter.sendMail({
-      from: `"Digital Estate Vault" <${process.env.GMAIL_USER}>`,
-      to,
-      subject,
-      html,
-    });
-    logger.info(`Email sent to ${to}: ${info.messageId}`);
-    return info;
-  } catch (err) {
-    logger.error(`Email failed to ${to}: ${err.message}`);
-    throw err;
+  if (gmailApiConfigured()) {
+    providers.push(['Gmail API', () => sendWithGmailApi({ to, subject, html })]);
   }
+
+  if (process.env.RESEND_API_KEY) {
+    providers.push(['Resend', () => sendWithResend({ to, subject, html })]);
+  }
+
+  if (gmailSmtpConfigured()) {
+    providers.push(['Gmail SMTP', async () => {
+      const transporter = createTransporter();
+      const info = await transporter.sendMail({
+        from: gmailFrom(),
+        to,
+        subject,
+        html,
+      });
+      logger.info(`Email sent via Gmail SMTP to ${to}: ${info.messageId}`);
+      return info;
+    }]);
+  }
+
+  if (providers.length === 0) {
+    logger.warn(`[EMAIL SIMULATED] To: ${to} | Subject: ${subject}`);
+    return { simulated: true };
+  }
+
+  let lastError = null;
+  for (const [providerName, send] of providers) {
+    try {
+      return await send();
+    } catch (err) {
+      lastError = err;
+      logger.warn(`${providerName} failed to send email to ${to}: ${err.message}`);
+    }
+  }
+
+  logger.error(`Email failed to ${to}: ${lastError?.message || 'No mail provider succeeded'}`);
+  throw lastError || new Error('No mail provider succeeded');
 };
 
 // ── Shared style block ─────────────────────────────
